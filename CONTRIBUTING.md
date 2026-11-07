@@ -35,6 +35,8 @@ profiles before any uninstall, which removes the app's local data.
 Release builds enable R8 and resource shrinking. Produce `:app:assembleRelease`,
 sign the APK with your production key, and ship **corresponding source** (and
 third-party notices) alongside any binary you publish, per GPL-3.0-or-later.
+Published versions are built and signed in GitHub Actions after maintainer
+signing secrets are configured on the repository.
 
 ## Run checks
 

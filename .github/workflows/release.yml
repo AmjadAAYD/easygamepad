@@ -1,0 +1,158 @@
+name: Release
+run-name: Release ${{ github.ref_name }}
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-tag:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Require a stable version tag
+        env:
+          RELEASE_REF_TYPE: ${{ github.ref_type }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if [[ "$RELEASE_REF_TYPE" != tag ]]; then
+            echo "::error::Run Release on an existing vX.Y.Z tag."
+            exit 1
+          fi
+          python3 -B .github/scripts/release.py validate-tag "$RELEASE_TAG"
+
+  checks:
+    needs: validate-tag
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  build:
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ vars.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android SDK packages
+        run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" "build-tools;36.0.0"'
+
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6
+        with:
+          cache-read-only: true
+
+      - name: Restore signing key
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/easygamepad-release.jks
+        run: python3 -B .github/scripts/release.py restore-keystore
+
+      - name: Assemble signed release APK
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/easygamepad-release.jks
+        run: bash ./gradlew :app:assembleRelease --no-daemon --no-build-cache --no-configuration-cache
+
+      - name: Verify and package release assets
+        run: |
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
+          python3 -B .github/scripts/release.py package "$RELEASE_TAG"
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-assets
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Remove signing key
+        if: ${{ always() }}
+        run: rm -f -- "${{ runner.temp }}/easygamepad-release.jks"
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f443b9912 # v4
+        with:
+          node-version: '24'
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-assets
+          path: dist
+
+      - name: Generate release notes (git-cliff)
+        run: |
+          set -euo pipefail
+          notes_file="${RUNNER_TEMP}/release-notes.md"
+          python3 -B .github/scripts/release.py prepare-notes "$RELEASE_TAG" > "$notes_file"
+          if [[ ! -s "$notes_file" ]]; then
+            echo "::error::Release notes are empty for $RELEASE_TAG."
+            exit 1
+          fi
+
+      - name: Create draft, attach assets and publish
+        env:
+          RELEASE_NOTES_FILE: ${{ runner.temp }}/release-notes.md
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --json url --jq .url >/dev/null; then
+            echo "::error::A release already exists for $RELEASE_TAG. Published releases are never overwritten. If a previous attempt left a draft, delete only that draft (keep the tag) before retrying."
+            exit 1
+          fi
+          notes_file="${RELEASE_NOTES_FILE}"
+          if [[ ! -s "$notes_file" ]]; then
+            echo "::error::Release notes file is missing or empty."
+            exit 1
+          fi
+          shopt -s nullglob
+          assets=(dist/*)
+          if [[ ${#assets[@]} -eq 0 ]]; then
+            echo "::error::No release assets found in dist/."
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" "${assets[@]}" --verify-tag --draft \
+            --title "EasyGamepad ${RELEASE_TAG#v}" \
+            --notes-file "$notes_file"
+          gh release edit "$RELEASE_TAG" --draft=false
