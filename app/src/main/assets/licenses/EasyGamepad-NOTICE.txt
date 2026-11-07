@@ -1,0 +1,18 @@
+EasyGamepad
+Copyright (C) 2026 Edgard
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See LICENSE for the full text.
+
+X10 images and button geometry originate from x20ctl.
+Copyright (C) 2026 Amjad AAYD. GPL-3.0-or-later.
+Preserved original notices: licenses/x20ctl-NOTICE.txt.
+File provenance and third-party terms: THIRD_PARTY.md.
+
+EasyGamepad is an independent application, not affiliated with or endorsed by
+EasySMX or x20ctl. Product names and marks belong to their respective owners.
