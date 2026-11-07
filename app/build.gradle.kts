@@ -22,7 +22,7 @@ android {
         applicationId = "br.dev.edgard.easygamepad"
         minSdk = 26
         targetSdk = 37
-        versionCode = 7
+        versionCode = 8
         versionName = "1.0.0"
     }
     buildFeatures { compose = true; buildConfig = true }
